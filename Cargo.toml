@@ -1,0 +1,12 @@
+[package]
+name = "js_dependency_analyze"
+version = "0.1.0"
+authors = ["Tangzy <tangzy@welogix.cn>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+itertools = "0.10.1"
+clap = "2.33.3"
+regex = "1.5.4"
