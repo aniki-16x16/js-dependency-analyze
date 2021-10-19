@@ -3,19 +3,19 @@ use std::{fmt, fs};
 #[derive(Debug, Clone)]
 pub struct FileRecoder {
     pub dirname: String,
-    pub filename: Option<String>,
+    pub filename: String,
     pub extension: Option<String>,
 }
 
 impl FileRecoder {
     pub fn new(path: &str) -> Self {
-        let (dirname, last) = split_last_pattern(path, '/');
+        let (dirname, last) = rsplit_once(path, '/');
         let last = last.unwrap();
-        let mut filename = Some(last.clone());
+        let mut filename = last.clone();
         let mut extension = None;
         if last.contains(".") {
-            let tmp = split_last_pattern(&last, '.');
-            filename.replace(tmp.0);
+            let tmp = rsplit_once(&last, '.');
+            filename = tmp.0;
             extension = tmp.1;
         }
         FileRecoder {
@@ -40,12 +40,14 @@ impl FileRecoder {
     }
 
     pub fn complete_path(&mut self) -> bool {
-        let extensions = ["js", "jsx", "ts", "tsx"];
+        let extensions = ["js", "jsx", "ts", "tsx"]; // 四种可省的扩展名
         let check_exist = |path: String| fs::File::open(path).is_ok();
+        // 当前路径已经是完整路径
         if check_exist(self.to_string()) {
             return true;
         }
-        self.filename.as_mut().unwrap().push_str(
+        // 否则extension应是文件名的一部分，将其拼接到filename的尾部
+        self.filename.push_str(
             &self
                 .extension
                 .take()
@@ -58,9 +60,9 @@ impl FileRecoder {
             }
         }
 
-        self.dirname
-            .push_str(&format!("/{}", self.filename.take().unwrap()));
-        self.filename.replace(String::from("index"));
+        // 此时传入的路径应该是文件夹，在内部应有一个index文件作为入口(CommonJS规范)
+        self.dirname.push_str(&format!("/{}", self.filename));
+        self.filename = String::from("index");
         for ext in extensions.iter() {
             self.extension.replace(ext.to_string());
             if fs::File::open(self.to_string()).is_ok() {
@@ -71,7 +73,7 @@ impl FileRecoder {
         false
     }
 
-    pub fn read_line(&mut self) -> Vec<String> {
+    pub fn read_as_line(&mut self) -> Vec<String> {
         fs::read_to_string(self.to_string())
             .expect("file doesn't exist")
             .split('\n')
@@ -87,13 +89,13 @@ impl fmt::Display for FileRecoder {
             f,
             "{}/{}.{}",
             self.dirname,
-            self.filename.as_ref().unwrap_or(&"".to_string()),
+            self.filename,
             self.extension.as_ref().unwrap_or(&"".to_string())
         )
     }
 }
 
-fn split_last_pattern(s: &str, pattern: char) -> (String, Option<String>) {
+pub fn rsplit_once(s: &str, pattern: char) -> (String, Option<String>) {
     let pos = s.chars().rev().position(|c| c == pattern);
     match pos {
         None => (s.to_string(), None),
