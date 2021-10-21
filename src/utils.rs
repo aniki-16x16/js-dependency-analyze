@@ -73,7 +73,7 @@ impl FileRecoder {
         false
     }
 
-    pub fn read_as_line(&mut self) -> Vec<String> {
+    pub fn read_import_line(&mut self) -> Vec<String> {
         fs::read_to_string(self.to_string())
             .expect("file doesn't exist")
             .split('\n')
@@ -95,7 +95,7 @@ impl fmt::Display for FileRecoder {
     }
 }
 
-pub fn rsplit_once(s: &str, pattern: char) -> (String, Option<String>) {
+fn rsplit_once(s: &str, pattern: char) -> (String, Option<String>) {
     let pos = s.chars().rev().position(|c| c == pattern);
     match pos {
         None => (s.to_string(), None),

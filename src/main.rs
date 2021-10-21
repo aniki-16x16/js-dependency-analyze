@@ -1,13 +1,20 @@
 pub mod utils;
 
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::HashMap,
+    fs,
+    io::{Result, Write},
+    time::Instant,
+};
 
 use clap::{App, Arg};
 use indicatif::ProgressBar;
+use itertools::Itertools;
 use regex::Regex;
+use serde::Serialize;
 use utils::FileRecoder;
 
-fn main() {
+fn main() -> Result<()> {
     let matches = App::new("JS Dependency Analyzer")
         .version("0.1.0")
         .arg(
@@ -25,39 +32,42 @@ fn main() {
         )
         .get_matches();
 
-    let re =
-        Regex::new(r#"(?:import.*['"](.*)['"]|require\(['"](.*)['"]\)|\s+from\s+['"](.*)['"])"#)
-            .unwrap();
+    let re = Regex::new(
+        r#"(?:^import.*from\s+['"](.*)['"]|require\(['"](.*)['"]\)|\s+from\s+['"](.*)['"])"#,
+    )
+    .unwrap();
     let pb = ProgressBar::new(1);
     let timer = Instant::now();
+
     let root = FileRecoder::new(matches.value_of("path").unwrap());
     let mut paths = vec![root.clone()];
-    let mut alias = HashMap::new();
-    for item in matches
+    let alias: HashMap<&str, &str> = matches
         .value_of("alias")
         .map_or(vec![], |x| x.split(',').collect())
-    {
-        let pair = item.split('=').collect::<Vec<_>>();
-        alias.insert(pair[0], pair[1]);
-    }
-    let mut ref_count = HashMap::new();
+        .iter()
+        .map(|x| {
+            let mut tmp = x.split('=');
+            (tmp.next().unwrap(), tmp.next().unwrap())
+        })
+        .collect();
+    let mut adj_matirx: HashMap<String, Vec<usize>> =
+        vec![(root.to_string(), vec![])].into_iter().collect();
+    let mut path_idx_map: HashMap<String, usize> =
+        vec![(root.to_string(), 0)].into_iter().collect();
 
     while paths.len() > 0 {
         pb.inc(1);
         let mut current = paths.pop().unwrap();
-        for line in &current.read_as_line() {
+        for line in &current.read_import_line() {
             let caps = re.captures(line);
             if caps.is_some() {
                 let caps = caps.unwrap();
-                let mut name = if caps.get(1).is_some() {
-                    caps.get(1).unwrap()
-                } else if caps.get(2).is_some() {
-                    caps.get(2).unwrap()
-                } else {
-                    caps.get(3).unwrap()
-                }
-                .as_str()
-                .to_string();
+                let mut name = caps
+                    .get(1)
+                    .or(caps.get(2).or(caps.get(3)))
+                    .unwrap()
+                    .as_str()
+                    .to_string();
 
                 let mut is_relative_path = None;
                 if name.starts_with("./") || name.starts_with("../") {
@@ -79,39 +89,67 @@ fn main() {
                         false => root.join(&name),
                     };
                     if next_path.complete_path() {
-                        // 保存补全后的真实有效路径，未访问过的情况下才加入paths
+                        // 保存补全后的真实有效路径，且未访问过的情况下才加入paths
                         name = next_path.to_string();
-                        if ref_count.get(&name).is_none() {
+                        if adj_matirx.get(&name).is_none() {
                             paths.push(next_path);
                             pb.inc_length(1);
+                            adj_matirx.insert(name.clone(), vec![]);
+                            path_idx_map.insert(name.clone(), path_idx_map.len());
                         }
+                        adj_matirx
+                            .get_mut(&current.to_string())
+                            .unwrap()
+                            .push(path_idx_map[&name]);
                     }
                 }
-                *ref_count.entry(name).or_insert(0) += 1;
             }
         }
     }
     pb.finish();
+    println!("expend {}ms\nserializing...", timer.elapsed().as_millis());
 
-    // 搜索最小公共前缀并替换
+    // 搜索最小公共前缀
     let mut prefix_pos = root.dirname.len();
-    for (k, _) in &ref_count {
-        if k.starts_with("/") {
-            for i in 0..prefix_pos {
-                if &root.dirname[i..i + 1] != &k[i..i + 1] {
-                    prefix_pos = i - 1;
-                    break;
-                }
+    for key in path_idx_map.keys() {
+        for i in 0..prefix_pos {
+            if &root.dirname[i..i + 1] != &key[i..i + 1] {
+                prefix_pos = i - 1;
+                break;
             }
         }
     }
-    let mut result = HashMap::new();
-    for (k, v) in ref_count.drain() {
-        let mut key = k;
-        if key.starts_with("/") {
-            key.replace_range(..prefix_pos, "$root/");
+    let total = path_idx_map.len();
+    fs::File::create("result.json")?;
+    let mut file = fs::OpenOptions::new().append(true).open("result.json")?;
+    file.write(&[b'['])?;
+    file.flush()?;
+    // 按照升序排列键值对
+    for (k, i) in path_idx_map
+        .drain()
+        .map(|(k, i)| (k, i))
+        .sorted_by(|a, b| a.1.cmp(&b.1))
+    {
+        let mut key = k.clone();
+        key.replace_range(..prefix_pos, "$root/");
+        let mut buf = serde_json::to_vec(&ResultAdjMaritx {
+            name: key,
+            verts: adj_matirx.remove(&k).unwrap(),
+        })?;
+        if i < total - 1 {
+            buf.push(b',');
         }
-        result.insert(key, v);
+        buf.push(b'\n');
+        file.write(&buf)?;
+        file.flush()?;
     }
-    println!("{:#?}\nexpend {}ms", result, timer.elapsed().as_millis());
+    file.write(&[b']'])?;
+    file.flush()?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct ResultAdjMaritx {
+    name: String,
+    verts: Vec<usize>,
 }
